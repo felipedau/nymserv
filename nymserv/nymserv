@@ -17,6 +17,11 @@
 # or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
 # for more details.
 
+from pyaxo import Axolotl
+from passlib.utils.pbkdf2 import pbkdf2
+import hashlib
+import sqlite3
+from binascii import b2a_base64,a2b_base64
 from email.parser import Parser
 from time import sleep
 import cStringIO
@@ -256,7 +261,7 @@ class Mailbox():
                 continue
             processed = msgparse(recipient, message)
             if processed:
-                    goodcnt += 1
+                goodcnt += 1
             else:
                 heldkey = held.add(message)
                 logmes = "Message processing failed.  Saving as %s" % heldkey
@@ -315,7 +320,7 @@ class Mailbox():
 class UpdateUser():
     def __init__(self):
         # Valid fields are those that are deemed user-definable.
-        self.valid_fields = ['symmetric', 'hsub', 'delete', 'subject']
+        self.valid_fields = ['symmetric', 'hsub', 'delete', 'subject', 'ephemeral']
         self.alternatives = {'hash-subject':        'hsub',
                              'subject-password':    'hsub',
                              'hash-key':            'hsub'}
@@ -436,11 +441,11 @@ class PostPrep():
         recipient = conf['fingerprint']
         # If Symmetric encryption is specified, we don't need to throw the
         # Keyid during Asymmetric encryption.
-        if 'symmetric' in conf and conf['symmetric']:
-            logging.debug('Symmetric encryption defined, not throwing KeyID')
+        if ('symmetric' in conf and conf['symmetric']) or ('ephemeral' in conf and conf['ephemeral']):
+            logging.debug('Symmetric or Ephemeral encryption defined, not throwing KeyID')
             throwkid = False
         else:
-            logging.debug('No Symmetric encryption defined, throwing KeyID')
+            logging.debug('No Symmetric or Ephemeral encryption defined, throwing KeyID')
             throwkid = True
         logging.debug('Signing and Encrypting message for ' + recipient)
         try:
@@ -459,6 +464,19 @@ class PostPrep():
             if 'symmetric' in conf and conf['symmetric']:
                 logging.debug('Adding Symmetric Encryption layer')
                 enc_payload = gpg.symmetric(conf['symmetric'], enc_payload)
+            if 'ephemeral' in conf and conf['ephemeral']:
+                dbname = os.path.join(config.get('paths', 'users'), conf['fingerprint'] + '.db')
+                logging.debug('Adding Ephemeral Encryption layer')
+                logging.debug(dbname)
+                a = Axolotl(conf['fingerprint'], dbname=dbname, dbpassphrase='123')
+                a.loadState(conf['fingerprint'],'b')
+                ciphertext = b2a_base64(a.encrypt(enc_payload)).strip()
+                enc_payload = '-----BEGIN PGP MESSAGE-----\n\n'
+                lines = [ciphertext[i:i+64] for i in xrange(0, len(ciphertext), 64)]
+                for line in lines:
+                    enc_payload += line+'\n'
+                enc_payload += '-----END PGP MESSAGE-----\n'
+                a.saveState()
             self.pool_write(headers + '\n' + enc_payload)
         elif result:
             logging.error("GnuPG returned an error whilst attempting to "
@@ -534,7 +552,7 @@ signed by the Nymserver before being delivered to the newsgroup
 alt.anonymous.messages.
 
 If you want to modify your Nym in the future, send a signed and encrypted
-message to config@mixnym.net.  The message should contain one instruction
+message to config@anemone.mooo.com.  The message should contain one instruction
 per line, in the format:
 
 instruction: setting
@@ -970,6 +988,8 @@ def process_config(result, payload):
             logging.debug(logmes)
         userconf[key] = moddict[key]
         modified = True
+    if 'ephemeral' in moddict and moddict['ephemeral']:
+        genEphDB(userconf['fingerprint'], userconf['ephemeral'])
     if modified and not created:
         # Add (or update) the modified date in the user configuration
         userconf['modified'] = nymserv.strutils.datestr()
@@ -1050,6 +1070,18 @@ def process_send(result, payload):
     # foo_name = Freeform element of email address (Foo).
     # foo_addy = LHS of @ in foo_email (foo).
     # foo_domain = RHS of @ in foo_email
+
+    # Remove ephemeral wrapper from payload if required
+    dbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
+    if os.path.exists(dbname) and '-----' in payload:
+        a = Axolotl(fingerprint, dbname=dbname, dbpassphrase='123')
+        a.loadState(fingerprint, 'b')
+        print payload
+        pieces = payload.split('-----')
+        print pieces[2].replace('\n','')
+        payload = a.decrypt(a2b_base64(pieces[2].replace('\n','')))
+        a.saveState()
+
     send_msg = email.message_from_string(payload)
     # This section checks that the From header matches the verified
     # signature.  It's a matter for debate but currently it's enforced
@@ -1257,6 +1289,48 @@ def cleanup():
             sys.stdout.write(nym + "\n")
     sys.exit(0)
 
+def genEphDB(fingerprint, mkey):
+    mkey = hashlib.sha256(mkey).digest()
+    dbname = os.path.join(config.get('paths', 'basedir'), 'nymserv/generic.db')
+    a = Axolotl('a', dbname=dbname, dbpassphrase=None)
+    a.loadState('a', 'b')
+    realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
+    a.dbname = realdbname
+    a.dbpassphrase = '123'
+    if a.mode: # alice mode
+        RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
+        HKs = pbkdf2(mkey, b'\x01', 10, prf='hmac-sha256')
+        HKr = pbkdf2(mkey, b'\x02', 10, prf='hmac-sha256')
+        NHKs = pbkdf2(mkey, b'\x03', 10, prf='hmac-sha256')
+        NHKr = pbkdf2(mkey, b'\x04', 10, prf='hmac-sha256')
+        CKs = pbkdf2(mkey, b'\x05', 10, prf='hmac-sha256')
+        CKr = pbkdf2(mkey, b'\x06', 10, prf='hmac-sha256')
+        CONVid = pbkdf2(mkey, b'\x07', 10, prf='hmac-sha256')
+    else: # bob mode
+        RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
+        HKs = pbkdf2(mkey, b'\x02', 10, prf='hmac-sha256')
+        HKr = pbkdf2(mkey, b'\x01', 10, prf='hmac-sha256')
+        NHKs = pbkdf2(mkey, b'\x04', 10, prf='hmac-sha256')
+        NHKr = pbkdf2(mkey, b'\x03', 10, prf='hmac-sha256')
+        CKs = pbkdf2(mkey, b'\x06', 10, prf='hmac-sha256')
+        CKr = pbkdf2(mkey, b'\x05', 10, prf='hmac-sha256')
+        CONVid = pbkdf2(mkey, b'\x07', 10, prf='hmac-sha256')
+
+    a.state['RK'] = RK
+    a.state['HKs'] = HKs
+    a.state['HKr'] = HKr
+    a.state['NHKs'] = NHKs
+    a.state['NHKr'] = NHKr
+    a.state['CKs'] = CKs
+    a.state['CKr'] = CKr
+    a.state['CONVid'] = CONVid
+    a.state['name'] = fingerprint
+    a.state['other_name'] = 'b'
+
+    with a.db:
+        cur = a.db.cursor()
+        cur.execute('DELETE FROM conversations WHERE my_identity = "a"')
+    a.saveState()
 
 def main():
     if options.cleanup:
