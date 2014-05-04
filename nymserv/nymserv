@@ -1291,7 +1291,8 @@ def cleanup():
 
 def genEphDB(fingerprint, mkey):
     mkey = hashlib.sha256(mkey).digest()
-    dbname = os.path.join(config.get('paths', 'basedir'), 'nymserv/generic.db')
+    dbname = os.path.join(config.get('paths', 'basedir'), 'nymserv', 'generic.db')
+    print dbname
     a = Axolotl('a', dbname=dbname, dbpassphrase=None)
     a.loadState('a', 'b')
     realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
