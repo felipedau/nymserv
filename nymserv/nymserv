@@ -552,7 +552,7 @@ signed by the Nymserver before being delivered to the newsgroup
 alt.anonymous.messages.
 
 If you want to modify your Nym in the future, send a signed and encrypted
-message to config@anemone.mooo.com.  The message should contain one instruction
+message to config@mixnym.net.  The message should contain one instruction
 per line, in the format:
 
 instruction: setting
