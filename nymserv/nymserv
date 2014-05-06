@@ -468,7 +468,7 @@ class PostPrep():
                 dbname = os.path.join(config.get('paths', 'users'), conf['fingerprint'] + '.db')
                 logging.debug('Adding Ephemeral Encryption layer')
                 logging.debug(dbname)
-                a = Axolotl(conf['fingerprint'], dbname=dbname, dbpassphrase='123')
+                a = Axolotl(conf['fingerprint'], dbname=dbname, dbpassphrase=config.get('pgp', 'passphrase'))
                 a.loadState(conf['fingerprint'],'b')
                 ciphertext = b2a_base64(a.encrypt(enc_payload)).strip()
                 enc_payload = '-----BEGIN PGP MESSAGE-----\n\n'
@@ -1074,11 +1074,11 @@ def process_send(result, payload):
     # Remove ephemeral wrapper from payload if required
     dbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
     if os.path.exists(dbname) and '-----' in payload:
-        a = Axolotl(fingerprint, dbname=dbname, dbpassphrase='123')
+        a = Axolotl(fingerprint, dbname=dbname, dbpassphrase=config.get('pgp', 'passphrase'))
         a.loadState(fingerprint, 'b')
-        print payload
+        #print payload
         pieces = payload.split('-----')
-        print pieces[2].replace('\n','')
+        #print pieces[2].replace('\n','')
         payload = a.decrypt(a2b_base64(pieces[2].replace('\n','')))
         a.saveState()
 
@@ -1297,7 +1297,7 @@ def genEphDB(fingerprint, mkey):
     a.loadState('a', 'b')
     realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
     a.dbname = realdbname
-    a.dbpassphrase = '123'
+    a.dbpassphrase = config.get('pgp', 'passphrase')
     if a.mode: # alice mode
         RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
         HKs = pbkdf2(mkey, b'\x01', 10, prf='hmac-sha256')
