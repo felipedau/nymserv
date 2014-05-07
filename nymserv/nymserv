@@ -1205,6 +1205,7 @@ def delete_nym(email, userconf):
     from os import remove
     keyfile = os.path.join(config.get('paths', 'users'), email + '.key')
     userfile = os.path.join(config.get('paths', 'users'), email + '.db')
+    ephdbfile = os.path.join(config.get('paths', 'users'), memcopy['fingerprint'] + '.db')
     if os.path.exists(userfile):
         logging.info('Deleting userfile: ' + userfile)
         remove(userfile)
@@ -1217,6 +1218,10 @@ def delete_nym(email, userconf):
     postprep.post_message(del_message, memcopy)
     logging.info('%(fingerprint)s: Deleting from keyring.' % memcopy)
     gpg.delete_key(memcopy['fingerprint'])
+    # Wait until nym delete message is sent to delete the ephdbfile
+    if os.path.exists(ephdbfile):
+        logging.info('Deleting ephdbfile: ' + ephdbfile)
+        remove(ephdbfile)
     logging.info('Deletion process complete.')
     return True
 
@@ -1292,7 +1297,7 @@ def cleanup():
 def genEphDB(fingerprint, mkey):
     mkey = hashlib.sha256(mkey).digest()
     dbname = os.path.join(config.get('paths', 'basedir'), 'nymserv', 'generic.db')
-    print dbname
+    #print dbname
     a = Axolotl('a', dbname=dbname, dbpassphrase=None)
     a.loadState('a', 'b')
     realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
