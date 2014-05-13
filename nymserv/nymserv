@@ -1302,6 +1302,8 @@ def genEphDB(fingerprint, mkey):
     a.loadState('a', 'b')
     realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
     a.dbname = realdbname
+    if os.path.exists(realdbname):
+        os.unlink(realdbname)
     a.dbpassphrase = config.get('pgp', 'passphrase')
     if a.mode: # alice mode
         RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
