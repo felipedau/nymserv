@@ -19,6 +19,8 @@
 
 from pyaxo import Axolotl
 from passlib.utils.pbkdf2 import pbkdf2
+import threading
+import Queue
 import hashlib
 import sqlite3
 from binascii import b2a_base64,a2b_base64
@@ -48,6 +50,7 @@ import nymserv.URL_Handler
 from nymserv.Config import options
 from nymserv.Config import config
 
+queue = Queue.Queue()
 
 class NymservError(Exception):
     """Base class for all Nymserver errors."""
@@ -1010,7 +1013,23 @@ def process_config(result, payload):
     return True
 
 
+def eph_decrypt(config, fingerprint, payload):
+    global queue
+    # Remove ephemeral wrapper from payload if required
+    dbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
+    if os.path.exists(dbname) and '-----' in payload:
+        try:
+            a = Axolotl(fingerprint, dbname=dbname, dbpassphrase=config.get('pgp', 'passphrase'))
+            a.loadState(fingerprint, 'b')
+            pieces = payload.split('-----')
+            payload = a.decrypt(a2b_base64(pieces[2].replace('\n','')))
+            a.saveState()
+        except SystemExit:
+            payload = 'x'
+        queue.put(payload)
+
 def process_send(result, payload):
+    global queue
     logging.debug('Message received for forwarding.')
     # We send messages for Nymholders after verifying their signature.
     try:
@@ -1071,16 +1090,15 @@ def process_send(result, payload):
     # foo_addy = LHS of @ in foo_email (foo).
     # foo_domain = RHS of @ in foo_email
 
-    # Remove ephemeral wrapper from payload if required
-    dbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
-    if os.path.exists(dbname) and '-----' in payload:
-        a = Axolotl(fingerprint, dbname=dbname, dbpassphrase=config.get('pgp', 'passphrase'))
-        a.loadState(fingerprint, 'b')
-        #print payload
-        pieces = payload.split('-----')
-        #print pieces[2].replace('\n','')
-        payload = a.decrypt(a2b_base64(pieces[2].replace('\n','')))
-        a.saveState()
+    # do ephemeral decrypt in thread to prevent errors if undecryptable message
+    epht = threading.Thread(target=eph_decrypt, args=(config,fingerprint,payload))
+    epht.start()
+    epht.join()
+    payload = queue.get()
+    if payload == 'x':
+        logmes = 'Undecryptable message - unsynced axolotl database?'
+        logging.info(logmes)
+        return False
 
     send_msg = email.message_from_string(payload)
     # This section checks that the From header matches the verified
