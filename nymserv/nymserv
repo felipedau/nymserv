@@ -1090,15 +1090,16 @@ def process_send(result, payload):
     # foo_addy = LHS of @ in foo_email (foo).
     # foo_domain = RHS of @ in foo_email
 
-    # do ephemeral decrypt in thread to prevent errors if undecryptable message
-    epht = threading.Thread(target=eph_decrypt, args=(config,fingerprint,payload))
-    epht.start()
-    epht.join()
-    payload = queue.get()
-    if payload == 'x':
-        logmes = 'Undecryptable message - unsynced axolotl database?'
-        logging.info(logmes)
-        return False
+    if os.path.isfile(os.path.join(config.get('paths', 'users'), fingerprint + '.db')):
+        # do ephemeral decrypt in thread to prevent errors if undecryptable message
+        epht = threading.Thread(target=eph_decrypt, args=(config,fingerprint,payload))
+        epht.start()
+        epht.join()
+        payload = queue.get()
+        if payload == 'x':
+            logmes = 'Undecryptable message - unsynced axolotl database?'
+            logging.info(logmes)
+            return False
 
     send_msg = email.message_from_string(payload)
     # This section checks that the From header matches the verified
