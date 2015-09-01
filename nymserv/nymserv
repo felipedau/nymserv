@@ -18,7 +18,6 @@
 # for more details.
 
 from pyaxo import Axolotl
-from passlib.utils.pbkdf2 import pbkdf2
 import threading
 import Queue
 import hashlib
@@ -323,7 +322,7 @@ class Mailbox():
 class UpdateUser():
     def __init__(self):
         # Valid fields are those that are deemed user-definable.
-        self.valid_fields = ['symmetric', 'hsub', 'delete', 'subject', 'ephemeral']
+        self.valid_fields = ['symmetric', 'hsub', 'delete', 'subject', 'ephemeral', 'ratchet']
         self.alternatives = {'hash-subject':        'hsub',
                              'subject-password':    'hsub',
                              'hash-key':            'hsub'}
@@ -991,8 +990,8 @@ def process_config(result, payload):
             logging.debug(logmes)
         userconf[key] = moddict[key]
         modified = True
-    if 'ephemeral' in moddict and moddict['ephemeral']:
-        genEphDB(userconf['fingerprint'], userconf['ephemeral'])
+    if 'ephemeral' in moddict and moddict['ephemeral'] and 'ratchet' in moddict and moddict['ratchet']:
+        genEphDB(userconf['fingerprint'], userconf['ephemeral'], userconf['ratchet'])
     if modified and not created:
         # Add (or update) the modified date in the user configuration
         userconf['modified'] = nymserv.strutils.datestr()
@@ -1313,51 +1312,28 @@ def cleanup():
             sys.stdout.write(nym + "\n")
     sys.exit(0)
 
-def genEphDB(fingerprint, mkey):
-    mkey = hashlib.sha256(mkey).digest()
-    dbname = os.path.join(config.get('paths', 'basedir'), 'nymserv', 'generic.db')
-    #print dbname
-    a = Axolotl('a', dbname=dbname, dbpassphrase=None)
-    a.loadState('a', 'b')
-    realdbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
-    a.dbname = realdbname
-    if os.path.exists(realdbname):
-        os.unlink(realdbname)
-    a.dbpassphrase = config.get('pgp', 'passphrase')
-    if a.mode: # alice mode
-        RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
-        HKs = pbkdf2(mkey, b'\x01', 10, prf='hmac-sha256')
-        HKr = pbkdf2(mkey, b'\x02', 10, prf='hmac-sha256')
-        NHKs = pbkdf2(mkey, b'\x03', 10, prf='hmac-sha256')
-        NHKr = pbkdf2(mkey, b'\x04', 10, prf='hmac-sha256')
-        CKs = pbkdf2(mkey, b'\x05', 10, prf='hmac-sha256')
-        CKr = pbkdf2(mkey, b'\x06', 10, prf='hmac-sha256')
-        CONVid = pbkdf2(mkey, b'\x07', 10, prf='hmac-sha256')
-    else: # bob mode
-        RK = pbkdf2(mkey, b'\x00', 10, prf='hmac-sha256')
-        HKs = pbkdf2(mkey, b'\x02', 10, prf='hmac-sha256')
-        HKr = pbkdf2(mkey, b'\x01', 10, prf='hmac-sha256')
-        NHKs = pbkdf2(mkey, b'\x04', 10, prf='hmac-sha256')
-        NHKr = pbkdf2(mkey, b'\x03', 10, prf='hmac-sha256')
-        CKs = pbkdf2(mkey, b'\x06', 10, prf='hmac-sha256')
-        CKr = pbkdf2(mkey, b'\x05', 10, prf='hmac-sha256')
-        CONVid = pbkdf2(mkey, b'\x07', 10, prf='hmac-sha256')
 
-    a.state['RK'] = RK
-    a.state['HKs'] = HKs
-    a.state['HKr'] = HKr
-    a.state['NHKs'] = NHKs
-    a.state['NHKr'] = NHKr
-    a.state['CKs'] = CKs
-    a.state['CKr'] = CKr
-    a.state['CONVid'] = CONVid
-    a.state['name'] = fingerprint
-    a.state['other_name'] = 'b'
+def genEphDB(fingerprint, mkey, ratchetKey):
+    dbname = os.path.join(config.get('paths', 'users'), fingerprint + '.db')
+    if os.path.exists(dbname):
+        os.unlink(dbname)
+    alice = Axolotl(name=fingerprint,
+                    dbname=dbname,
+                    dbpassphrase=config.get('pgp', 'passphrase'))
 
-    with a.db:
-        cur = a.db.cursor()
-        cur.execute('DELETE FROM conversations WHERE my_identity = "a"')
-    a.saveState()
+    # Based on the latest protocol specification (Oct/2014), Alice is
+    # the one that starts ratcheting the keys. Therefore, she needs
+    # needs Bob's Diffie-Hellman Ratchet Key (DHR). Since the nym
+    # already sends the master key to the nym server to be created,
+    # it makes more sense to assign mode Bob (False) to the nym and
+    # Alice (True) to the nym server, so that the ratchet key is also
+    # sent in the same message.
+    alice.createState(other_name='b',
+                      mkey=hashlib.sha256(mkey).digest(),
+                      mode=True,
+                      other_ratchetKey=a2b_base64(ratchetKey))
+    alice.saveState()
+
 
 def main():
     if options.cleanup:
